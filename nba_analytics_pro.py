@@ -177,8 +177,16 @@ def fmt(v, d: int = 1, suffix: str = "") -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CAPA DE DATOS (cacheada)
+# CAPA DE DATOS (cacheada y blindada con HEADERS para evitar bloqueos)
 # ─────────────────────────────────────────────────────────────────────────────
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+    "Referer": "https://www.nba.com/",
+    "Origin": "https://www.nba.com"
+}
+
+
 def season_str(y: int) -> str:
     return f"{y}-{str(y + 1)[-2:]}"
 
@@ -195,37 +203,43 @@ def season_options(n: int = 6) -> list[str]:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_league_players(season: str) -> pd.DataFrame:
-    kw = dict(season=season, season_type_all_star="Regular Season", per_mode_detailed="PerGame", timeout=TIMEOUT)
-    base = leaguedashplayerstats.LeagueDashPlayerStats(**kw).get_data_frames()[0]
-    if base.empty:
-        return base
-    adv = leaguedashplayerstats.LeagueDashPlayerStats(measure_type_detailed_defense="Advanced", **kw).get_data_frames()[0]
-    keep = ["PLAYER_ID", "OFF_RATING", "DEF_RATING", "NET_RATING", "AST_PCT", "REB_PCT",
-            "TM_TOV_PCT", "USG_PCT", "PACE", "PIE", "TS_PCT"]
-    adv = adv[[c for c in keep if c in adv.columns]].rename(columns={"TS_PCT": "TS_OFICIAL"})
-    df = base.merge(adv, on="PLAYER_ID", how="left")
-    for c in ["AST_PCT", "REB_PCT", "TM_TOV_PCT", "USG_PCT", "PIE", "TS_OFICIAL"]:
-        if c in df.columns:
-            df[c] = df[c] * 100
-    df["TS_CALC"] = ts_pct(df["PTS"], df["FGA"], df["FTA"])
-    df["EFG_CALC"] = efg_pct(df["FGM"], df["FG3M"], df["FGA"])
-    return df
+    kw = dict(season=season, season_type_all_star="Regular Season", per_mode_detailed="PerGame", timeout=TIMEOUT, headers=HEADERS)
+    try:
+        base = leaguedashplayerstats.LeagueDashPlayerStats(**kw).get_data_frames()[0]
+        if base.empty:
+            return base
+        adv = leaguedashplayerstats.LeagueDashPlayerStats(measure_type_detailed_defense="Advanced", **kw).get_data_frames()[0]
+        keep = ["PLAYER_ID", "OFF_RATING", "DEF_RATING", "NET_RATING", "AST_PCT", "REB_PCT",
+                "TM_TOV_PCT", "USG_PCT", "PACE", "PIE", "TS_PCT"]
+        adv = adv[[c for c in keep if c in adv.columns]].rename(columns={"TS_PCT": "TS_OFICIAL"})
+        df = base.merge(adv, on="PLAYER_ID", how="left")
+        for c in ["AST_PCT", "REB_PCT", "TM_TOV_PCT", "USG_PCT", "PIE", "TS_OFICIAL"]:
+            if c in df.columns:
+                df[c] = df[c] * 100
+        df["TS_CALC"] = ts_pct(df["PTS"], df["FGA"], df["FTA"])
+        df["EFG_CALC"] = efg_pct(df["FGM"], df["FG3M"], df["FGA"])
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_team_table(season: str) -> pd.DataFrame:
-    kw = dict(season=season, season_type_all_star="Regular Season", per_mode_detailed="PerGame", timeout=TIMEOUT)
-    adv = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", **kw).get_data_frames()[0]
-    if adv.empty:
-        return adv
-    ff = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Four Factors", **kw).get_data_frames()[0]
-    keep = [c for c in ["TEAM_ID", "FTA_RATE", "OPP_EFG_PCT", "OPP_TOV_PCT", "OPP_OREB_PCT"] if c in ff.columns]
-    df = adv.merge(ff[keep], on="TEAM_ID", how="left")
-    for c in ["EFG_PCT", "TS_PCT", "TM_TOV_PCT", "OREB_PCT", "DREB_PCT", "REB_PCT", "AST_PCT",
-              "FTA_RATE", "OPP_EFG_PCT", "OPP_TOV_PCT", "OPP_OREB_PCT"]:
-        if c in df.columns:
-            df[c] = df[c] * 100
-    return df
+    kw = dict(season=season, season_type_all_star="Regular Season", per_mode_detailed="PerGame", timeout=TIMEOUT, headers=HEADERS)
+    try:
+        adv = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Advanced", **kw).get_data_frames()[0]
+        if adv.empty:
+            return adv
+        ff = leaguedashteamstats.LeagueDashTeamStats(measure_type_detailed_defense="Four Factors", **kw).get_data_frames()[0]
+        keep = [c for c in ["TEAM_ID", "FTA_RATE", "OPP_EFG_PCT", "OPP_TOV_PCT", "OPP_OREB_PCT"] if c in ff.columns]
+        df = adv.merge(ff[keep], on="TEAM_ID", how="left")
+        for c in ["EFG_PCT", "TS_PCT", "TM_TOV_PCT", "OREB_PCT", "DREB_PCT", "REB_PCT", "AST_PCT",
+                  "FTA_RATE", "OPP_EFG_PCT", "OPP_TOV_PCT", "OPP_OREB_PCT"]:
+            if c in df.columns:
+                df[c] = df[c] * 100
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 def _prep_games(df: pd.DataFrame) -> pd.DataFrame:
@@ -241,40 +255,49 @@ def _prep_games(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_team_games(team_id: int, season: str) -> pd.DataFrame:
-    df = leaguegamefinder.LeagueGameFinder(
-        team_id_nullable=team_id, season_nullable=season,
-        season_type_nullable="Regular Season", league_id_nullable="00", timeout=TIMEOUT,
-    ).get_data_frames()[0]
-    return _prep_games(df)
+    try:
+        df = leaguegamefinder.LeagueGameFinder(
+            team_id_nullable=team_id, season_nullable=season,
+            season_type_nullable="Regular Season", league_id_nullable="00", timeout=TIMEOUT, headers=HEADERS,
+        ).get_data_frames()[0]
+        return _prep_games(df)
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_h2h(team_id: int, rival_id: int) -> pd.DataFrame:
-    df = leaguegamefinder.LeagueGameFinder(
-        team_id_nullable=team_id, vs_team_id_nullable=rival_id, league_id_nullable="00", timeout=TIMEOUT,
-    ).get_data_frames()[0]
-    return _prep_games(df)
+    try:
+        df = leaguegamefinder.LeagueGameFinder(
+            team_id_nullable=team_id, vs_team_id_nullable=rival_id, league_id_nullable="00", timeout=TIMEOUT, headers=HEADERS,
+        ).get_data_frames()[0]
+        return _prep_games(df)
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_player_log(player_id: int, season: str) -> pd.DataFrame:
-    df = playergamelog.PlayerGameLog(
-        player_id=player_id, season=season, season_type_all_star="Regular Season", timeout=TIMEOUT
-    ).get_data_frames()[0]
-    if df.empty:
+    try:
+        df = playergamelog.PlayerGameLog(
+            player_id=player_id, season=season, season_type_all_star="Regular Season", timeout=TIMEOUT, headers=HEADERS
+        ).get_data_frames()[0]
+        if df.empty:
+            return df
+        df = df.copy()
+        df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
+        df = df.sort_values("GAME_DATE").reset_index(drop=True)
+        for c in ["MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "PLUS_MINUS"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+        df["LOCAL"] = df["MATCHUP"].str.contains("vs.", regex=False)
+        df["RIVAL"] = df["MATCHUP"].str.split().str[-1]
+        df["GAME_NO"] = np.arange(1, len(df) + 1)
+        df["LABEL"] = df["GAME_DATE"].dt.strftime("%d/%m") + np.where(df["LOCAL"], " vs ", " @ ") + df["RIVAL"]
+        df["TS_G"] = ts_pct(df["PTS"], df["FGA"], df["FTA"])
+        df["EFG_G"] = efg_pct(df["FGM"], df["FG3M"], df["FGA"])
         return df
-    df = df.copy()
-    df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
-    df = df.sort_values("GAME_DATE").reset_index(drop=True)
-    for c in ["MIN", "PTS", "REB", "AST", "STL", "BLK", "TOV", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "PLUS_MINUS"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-    df["LOCAL"] = df["MATCHUP"].str.contains("vs.", regex=False)
-    df["RIVAL"] = df["MATCHUP"].str.split().str[-1]
-    df["GAME_NO"] = np.arange(1, len(df) + 1)
-    df["LABEL"] = df["GAME_DATE"].dt.strftime("%d/%m") + np.where(df["LOCAL"], " vs ", " @ ") + df["RIVAL"]
-    df["TS_G"] = ts_pct(df["PTS"], df["FGA"], df["FTA"])
-    df["EFG_G"] = efg_pct(df["FGM"], df["FG3M"], df["FGA"])
-    return df
+    except Exception:
+        return pd.DataFrame()
 
 
 # ── Descanso / Back-to-back ──────────────────────────────────────────────────
@@ -407,12 +430,15 @@ def player_impact(row: pd.Series, team_gp: float, k: float) -> float:
 # ── Shot charts ──────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_shots(player_id: int, season: str):
-    res = shotchartdetail.ShotChartDetail(
-        team_id=0, player_id=player_id, context_measure_simple="FGA",
-        season_nullable=season, season_type_all_star="Regular Season", timeout=TIMEOUT,
-    )
-    dfs = res.get_data_frames()
-    return dfs[0], dfs[1]
+    try:
+        res = shotchartdetail.ShotChartDetail(
+            team_id=0, player_id=player_id, context_measure_simple="FGA",
+            season_nullable=season, season_type_all_star="Regular Season", timeout=TIMEOUT, headers=HEADERS,
+        )
+        dfs = res.get_data_frames()
+        return dfs[0], dfs[1]
+    except Exception:
+        return pd.DataFrame(), pd.DataFrame()
 
 
 def summarize_log(log: pd.DataFrame) -> dict:
@@ -466,7 +492,7 @@ def resolve_season(selected: str):
     return selected, pd.DataFrame(), last_err
 
 
-with st.spinner("Cargando datos de la liga..."):
+with st.spinner("Conectando con la NBA y cargando jugadores..."):
     SEASON, LEAGUE, _err = resolve_season(season_sel)
 
 if LEAGUE.empty:
@@ -480,10 +506,14 @@ if SEASON != season_sel:
     st.sidebar.warning(f"Aún no hay datos de {season_sel}; usando {SEASON}.")
 
 try:
-    TEAM_TBL = load_team_table(SEASON).set_index("TEAM_ID", drop=False)
-except Exception as e:
+    TEAM_TBL = load_team_table(SEASON)
+    if not TEAM_TBL.empty and "TEAM_ID" in TEAM_TBL.columns:
+        TEAM_TBL = TEAM_TBL.set_index("TEAM_ID", drop=False)
+    else:
+        TEAM_TBL = pd.DataFrame()
+except Exception:
     TEAM_TBL = pd.DataFrame()
-    st.sidebar.error(f"No se cargaron stats de equipos: {e}")
+    st.sidebar.error("No se pudieron cargar las estadísticas de equipos.")
 
 LG = league_avgs(LEAGUE)
 NORM2NAME = {_norm(n): n for n in LEAGUE["PLAYER_NAME"]}
@@ -550,7 +580,7 @@ TEAM_ROWS = [
 def injury_panel(team_id: int, k: float):
     inj_map, _ = load_injuries()
     pool = LEAGUE[LEAGUE["TEAM_ID"] == team_id]
-    team_gp = float(TEAM_TBL.loc[team_id, "GP"]) if team_id in TEAM_TBL.index else 0.0
+    team_gp = float(TEAM_TBL.loc[team_id, "GP"]) if (not TEAM_TBL.empty and team_id in TEAM_TBL.index) else 0.0
     out_def, dbt_def, rep_rows = [], [], []
     for inj in inj_map.get(team_id, []):
         m = NORM2NAME.get(_norm(inj["name"]))
@@ -1282,7 +1312,7 @@ def tab_league():
 
     if view.startswith("Jugadores"):
         f1, f2 = st.columns(2)
-        max_gp = int(LEAGUE["GP"].max())
+        max_gp = int(LEAGUE["GP"].max()) if not LEAGUE.empty else 1
         min_gp = f1.slider("Mínimo de partidos", 1, max(max_gp, 2), max(1, int(max_gp * 0.25)))
         min_min = f2.slider("Mínimo de minutos por partido", 0, 36, 15)
         df = LEAGUE[(LEAGUE["GP"] >= min_gp) & (LEAGUE["MIN"] >= min_min)].dropna(subset=["USG_PCT", "TS_CALC"]).copy()
@@ -1332,7 +1362,7 @@ def tab_league():
         }
         f1, f2, f3 = st.columns(3)
         metric = f1.selectbox("Métrica", list(options))
-        max_gp = int(LEAGUE["GP"].max())
+        max_gp = int(LEAGUE["GP"].max()) if not LEAGUE.empty else 1
         min_gp = f2.slider("Mínimo de partidos", 1, max(max_gp, 2), max(1, int(max_gp * 0.25)), key="ld_gp")
         min_min = f3.slider("Mínimo de minutos", 0, 36, 20, key="ld_min")
         col = options[metric]
