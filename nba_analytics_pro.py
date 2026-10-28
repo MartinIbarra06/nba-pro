@@ -7,12 +7,6 @@ Módulos:
   3. Player Props Studio (líneas Over/Under, hit rate, splits, B2B, proyección)
   4. Shot Charts (mapa de tiros, calor, hexbin, eficiencia por zona vs liga)
   5. Liga (mapas de eficiencia de jugadores y equipos, líderes)
-
-Incluye: back-to-back / días de descanso, reporte de lesiones (ESPN, no oficial) con
-impacto estimado en el spread, y shot charts por jugador.
-
-Requisitos:   pip install streamlit pandas numpy plotly nba_api
-Ejecutar:     python -m streamlit run nba_analytics_pro.py
 """
 from __future__ import annotations
 
@@ -60,7 +54,7 @@ section[data-testid="stSidebar"] { background: #0e131b; border-right: 1px solid 
 .badge { display:inline-block; padding: 3px 10px; border-radius: 999px; font-size:.75rem;
          font-weight:700; background:#ff6b0022; color:#ff9a4d; border:1px solid #ff6b0055; margin-right:6px;}
 .kpi { background: linear-gradient(160deg,#161b22,#10141b); border:1px solid #232a36;
-       border-left: 4px solid var(--accent); border-radius: 14px; padding: 14px 16px; height: 100%; }
+        border-left: 4px solid var(--accent); border-radius: 14px; padding: 14px 16px; height: 100%; }
 .kpi-label { font-size:.7rem; letter-spacing:.09em; text-transform:uppercase; color:#94a3b8; font-weight:600;}
 .kpi-value { font-size:1.85rem; font-weight:800; color:#f8fafc; line-height:1.2; }
 .kpi-sub { font-size:.78rem; color:#94a3b8; margin-top:2px; }
@@ -79,7 +73,7 @@ div[data-testid="stExpander"] { border:1px solid #232a36; border-radius:12px; }
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# UTILIDADES DE UI (Con el try/except robusto sugerido por Claude)
+# UTILIDADES DE UI
 # ─────────────────────────────────────────────────────────────────────────────
 def show_plot(fig: go.Figure) -> None:
     try:
@@ -104,7 +98,6 @@ def kpi_html(label: str, value: str, sub: str = "", color: str = ORANGE, tone: s
 
 
 def kpi_row(items: list[dict], container=None) -> None:
-    """items: [{label, value, sub?, color?, tone?}]"""
     cols = (container or st).columns(len(items))
     for col, it in zip(cols, items):
         col.markdown(
@@ -157,14 +150,12 @@ def chips(wl: list[str]) -> str:
 # MÉTRICAS AVANZADAS
 # ─────────────────────────────────────────────────────────────────────────────
 def ts_pct(pts, fga, fta):
-    """True Shooting % = PTS / (2 · (FGA + 0.44 · FTA)) · 100"""
     denom = 2 * (np.asarray(fga, dtype=float) + 0.44 * np.asarray(fta, dtype=float))
     with np.errstate(divide="ignore", invalid="ignore"):
         return np.where(denom > 0, np.asarray(pts, dtype=float) / denom * 100, np.nan)
 
 
 def efg_pct(fgm, fg3m, fga):
-    """Effective FG % = (FGM + 0.5 · 3PM) / FGA · 100"""
     fga = np.asarray(fga, dtype=float)
     with np.errstate(divide="ignore", invalid="ignore"):
         return np.where(fga > 0, (np.asarray(fgm, dtype=float) + 0.5 * np.asarray(fg3m, dtype=float)) / fga * 100, np.nan)
@@ -288,7 +279,6 @@ def load_player_log(player_id: int, season: str) -> pd.DataFrame:
 
 # ── Descanso / Back-to-back ──────────────────────────────────────────────────
 def add_rest(g: pd.DataFrame) -> pd.DataFrame:
-    """Devuelve los partidos de un equipo en orden cronológico con días de descanso previos."""
     if g.empty:
         return g
     c = g.sort_values("GAME_DATE").copy()
@@ -298,7 +288,6 @@ def add_rest(g: pd.DataFrame) -> pd.DataFrame:
 
 
 def rest_info(g: pd.DataFrame, match_date) -> dict:
-    """Estado de descanso de un equipo de cara a un partido en `match_date`."""
     out = {"rest": None, "b2b": False, "g7": 0, "three_in_four": False, "last": None}
     if g.empty:
         return out
@@ -311,13 +300,12 @@ def rest_info(g: pd.DataFrame, match_date) -> dict:
     out["g7"] = int((prev["GAME_DATE"] >= md - pd.Timedelta(days=7)).sum())
     out["three_in_four"] = int((prev["GAME_DATE"] >= md - pd.Timedelta(days=3)).sum()) >= 2
     rest = (md - last).days - 1
-    if rest <= 10:  # si el último partido es muy antiguo, no hay información fiable de descanso
+    if rest <= 10:
         out["rest"], out["b2b"] = int(rest), rest == 0
     return out
 
 
 def rest_adjustment(info: dict, pen: float) -> float:
-    """Ajuste de margen (pts) por descanso. B2B = -pen; más descanso = pequeño bonus; 3 en 4 noches = castigo extra."""
     r = info["rest"]
     if r is None:
         return 0.0
@@ -326,14 +314,13 @@ def rest_adjustment(info: dict, pen: float) -> float:
 
 
 def attach_rest(log: pd.DataFrame, team_id: int) -> pd.DataFrame:
-    """Agrega REST y B2B al log de un jugador usando el calendario de su equipo (fallback: fechas del propio log)."""
     log = log.copy()
     rest = None
     try:
         tg = add_rest(load_team_games(team_id, SEASON))
         if not tg.empty:
             rest = log["Game_ID"].map(dict(zip(tg["GAME_ID"], tg["REST"])))
-    except Exception:  # noqa: BLE001
+    except Exception:
         rest = None
     if rest is None or rest.isna().all():
         rest = log["GAME_DATE"].diff().dt.days - 1
@@ -375,12 +362,11 @@ def status_group(status: str):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_injuries():
-    """Reporte de lesiones desde ESPN (endpoint público NO oficial). Devuelve ({team_id: [lesiones]}, error|None)."""
     try:
         r = requests.get(ESPN_INJURIES_URL, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
         data = r.json()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {}, str(e)
     out: dict = {}
     for t in data.get("injuries", []):
@@ -411,9 +397,6 @@ def injury_for_player(name: str):
 
 
 def player_impact(row: pd.Series, team_gp: float, k: float) -> float:
-    """Impacto estimado (puntos de margen por partido) de perder a un jugador.
-    impacto = k · (MIN/48) · max(PIE − 8, 0) · participación.  (8% ≈ nivel de reemplazo)
-    'participación' reduce el efecto si el jugador faltó a muchos partidos (ya está 'descontado' en los ratings)."""
     pie = row.get("PIE")
     if pie is None or pd.isna(pie):
         return 0.0
@@ -470,7 +453,6 @@ if st.sidebar.button("🔄 Refrescar datos"):
 
 
 def resolve_season(selected: str):
-    """Si la temporada elegida aún no tiene datos, retrocede hasta 2 temporadas."""
     opts = season_options(8)
     start = opts.index(selected)
     last_err = None
@@ -479,7 +461,7 @@ def resolve_season(selected: str):
             df = load_league_players(s)
             if not df.empty:
                 return s, df, None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             last_err = e
     return selected, pd.DataFrame(), last_err
 
@@ -499,7 +481,7 @@ if SEASON != season_sel:
 
 try:
     TEAM_TBL = load_team_table(SEASON).set_index("TEAM_ID", drop=False)
-except Exception as e:  # noqa: BLE001
+except Exception as e:
     TEAM_TBL = pd.DataFrame()
     st.sidebar.error(f"No se cargaron stats de equipos: {e}")
 
@@ -566,7 +548,6 @@ TEAM_ROWS = [
 
 
 def injury_panel(team_id: int, k: float):
-    """Panel editable de bajas. Devuelve el impacto total estimado (pts de margen)."""
     inj_map, _ = load_injuries()
     pool = LEAGUE[LEAGUE["TEAM_ID"] == team_id]
     team_gp = float(TEAM_TBL.loc[team_id, "GP"]) if team_id in TEAM_TBL.index else 0.0
@@ -640,13 +621,12 @@ def tab_matchup():
             gl, gv = load_team_games(idl, SEASON), load_team_games(idv, SEASON)
             h2h = load_h2h(idl, idv)
             inj_map, inj_err = load_injuries()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         st.error(f"No se pudo consultar la API de la NBA: {e}")
         return
 
     tl, tv = TEAM_TBL.loc[idl], TEAM_TBL.loc[idv]
 
-    # ── Base del modelo: ritmo esperado × cruce ORtg/DRtg ──
     poss = (tl["PACE"] + tv["PACE"]) / 2
     pts_l = poss * (tl["OFF_RATING"] + tv["DEF_RATING"]) / 200
     pts_v = poss * (tv["OFF_RATING"] + tl["DEF_RATING"]) / 200
@@ -659,9 +639,8 @@ def tab_matchup():
     ril, riv = rest_info(gl, match_date), rest_info(gv, match_date)
     adj_rest = (rest_adjustment(ril, b2b_pen) - rest_adjustment(riv, b2b_pen)) if use_rest else 0.0
 
-    top = st.container()  # el resumen se rellena al final, cuando ya se conocen las lesiones
+    top = st.container()
 
-    # ── Radiografía ──
     st.markdown("### 🧬 Radiografía táctica")
     cr1, cr2 = st.columns([1.1, 1])
     cols_ok = [(c, lab, inv) for c, lab, inv in TEAM_RADAR if c in TEAM_TBL.columns]
@@ -676,7 +655,6 @@ def tab_matchup():
         st.markdown("&nbsp;")
         show_df(pd.DataFrame(rows))
 
-    # ── Descanso y calendario ──
     st.markdown("### 😴 Descanso y back-to-back")
     if SEASON != current_season():
         st.caption("⚠️ Se usan datos de una temporada anterior: el descanso calculado puede no ser representativo.")
@@ -720,7 +698,6 @@ def tab_matchup():
         figr.update_layout(title="Margen medio según días de descanso (etiqueta = récord G-P)")
         show_plot(style_fig(figr, 330))
 
-    # ── Lesiones ──
     st.markdown("### 🩹 Lesiones y disponibilidad")
     if inj_err and not inj_map:
         st.info("No se pudo obtener el reporte automático de lesiones (fuente: ESPN, no oficial). Podés cargar las bajas manualmente.")
@@ -736,7 +713,6 @@ def tab_matchup():
     if not use_inj:
         loss_l = loss_v = 0.0
 
-    # ── Cálculo final del modelo ──
     pl, pv = pts_l + hca / 2, pts_v - hca / 2
     pl, pv = pl + adj_form / 2, pv - adj_form / 2
     pl, pv = pl + adj_rest / 2, pv - adj_rest / 2
@@ -778,7 +754,6 @@ def tab_matchup():
         st.caption("Modelo: posesiones esperadas × cruce ORtg/DRtg + localía + forma reciente + descanso/B2B + bajas. "
                    "Probabilidad vía distribución normal del margen. Estimación estadística, no una garantía.")
 
-    # ── Forma reciente ──
     st.markdown("### 🔥 Forma reciente")
     f1, f2 = st.columns(2)
     for col, g, name, ab, color in [(f1, gl, local, al, ORANGE), (f2, gv, visitante, av, BLUE)]:
@@ -811,7 +786,6 @@ def tab_matchup():
             )[["Fecha", "MATCHUP", "WL", "Marcador", "PLUS_MINUS"]].rename(columns={"MATCHUP": "Partido", "WL": "Res", "PLUS_MINUS": "+/-"})
             show_df(tbl)
 
-    # ── H2H ──
     st.markdown(f"### ⚔️ Historial directo: {local} vs {visitante}")
     if h2h.empty:
         st.info("No hay cruces registrados.")
@@ -850,7 +824,7 @@ PLAYER_RADAR = [
     ("PTS", "Puntos"), ("REB", "Rebotes"), ("AST", "Asistencias"), ("STL", "Robos"), ("BLK", "Tapones"),
     ("TS_CALC", "TS%"), ("EFG_CALC", "eFG%"), ("USG_PCT", "USG%"), ("PIE", "PIE"),
 ]
-COMPARE_ROWS = [  # etiqueta, clave, decimales, mayor_es_mejor
+COMPARE_ROWS = [
     ("Partidos", "PJ", 0, True), ("Minutos", "MIN", 1, True), ("Puntos", "PTS", 1, True),
     ("Rebotes", "REB", 1, True), ("Asistencias", "AST", 1, True), ("Robos", "STL", 1, True),
     ("Tapones", "BLK", 1, True), ("Pérdidas", "TOV", 1, False), ("Triples/partido", "FG3M", 1, True),
@@ -900,7 +874,7 @@ def tab_compare():
     try:
         with st.spinner("Cargando registros de partidos..."):
             la, lb = load_player_log(int(pa["PLAYER_ID"]), SEASON), load_player_log(int(pb["PLAYER_ID"]), SEASON)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         st.error(f"No se pudo consultar la API de la NBA: {e}")
         return
     if la.empty or lb.empty:
@@ -938,7 +912,6 @@ def tab_compare():
         figb.update_layout(barmode="group", title="Promedios por partido")
         show_plot(style_fig(figb, 440))
 
-    # Eficiencia de tiro
     e1, e2 = st.columns(2)
     with e1:
         cats = ["TS%", "eFG%", "FG%", "3P%", "FT%"]
@@ -1002,7 +975,7 @@ def tab_props():
     try:
         with st.spinner(f"Consultando partidos de {p['PLAYER_NAME']}..."):
             log = load_player_log(pid, SEASON)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         st.error(f"No se pudo consultar la API de la NBA: {e}")
         return
     if log.empty:
@@ -1065,7 +1038,6 @@ def tab_props():
     if n < 8:
         st.warning("Muestra pequeña (< 8 partidos): interpreta hit rate y proyección con cautela.")
 
-    # Gráfico de barras partido a partido
     ch = sub.assign(VAL=vals)
     figb = go.Figure()
     figb.add_bar(x=ch["LABEL"], y=ch["VAL"], marker_color=np.where(ch["VAL"] > line, GREEN, np.where(ch["VAL"] < line, RED, MUTED)),
@@ -1118,7 +1090,6 @@ def tab_props():
 
 
 def status_banner(p: pd.Series) -> None:
-    """Muestra estado de lesión del jugador y descanso de su equipo para hoy."""
     data, err = load_injuries()
     if err and not data:
         st.caption("Reporte de lesiones no disponible en este momento.")
@@ -1136,12 +1107,11 @@ def status_banner(p: pd.Series) -> None:
         if ri["rest"] is not None:
             tag = " · ⚠️ BACK-TO-BACK" if ri["b2b"] else ""
             st.caption(f"Descanso de su equipo para hoy: {ri['rest']} día(s) · {ri['g7']} juegos en los últimos 7 días{tag}")
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
 def court_traces() -> list:
-    """Líneas de la cancha NBA (unidades = décimas de pie; aro en (0,0))."""
     ln = dict(color="#64748b", width=2)
 
     def sc(x, y, dash=None):
@@ -1154,16 +1124,16 @@ def court_traces() -> list:
     ta = np.linspace(np.pi - ang, ang, 100)
     arc_x, arc_y = 237.5 * np.cos(ta), 237.5 * np.sin(ta)
     return [
-        sc([-250, 250, 250, -250, -250], [-47.5, -47.5, 422.5, 422.5, -47.5]),            # contorno
-        sc([-80, -80, 80, 80], [-47.5, 142.5, 142.5, -47.5]),                                # pintura exterior
-        sc([-60, -60, 60, 60], [-47.5, 142.5, 142.5, -47.5]),                                # pintura interior
-        sc(60 * np.cos(th), 142.5 + 60 * np.sin(th)),                                        # círculo de tiros libres
+        sc([-250, 250, 250, -250, -250], [-47.5, -47.5, 422.5, 422.5, -47.5]),
+        sc([-80, -80, 80, 80], [-47.5, 142.5, 142.5, -47.5]),
+        sc([-60, -60, 60, 60], [-47.5, 142.5, 142.5, -47.5]),
+        sc(60 * np.cos(th), 142.5 + 60 * np.sin(th)),
         sc(60 * np.cos(th), 142.5 - 60 * np.sin(th), dash="dot"),
-        sc(40 * np.cos(th), 40 * np.sin(th)),                                                # área restringida
-        sc(7.5 * np.cos(tc), 7.5 * np.sin(tc)),                                              # aro
-        sc([-30, 30], [-7.5, -7.5]),                                                         # tablero
-        sc(np.r_[-220, arc_x, 220], np.r_[-47.5, arc_y, -47.5]),                             # línea de 3
-        sc(60 * np.cos(th), 422.5 - 60 * np.sin(th)),                                        # círculo central
+        sc(40 * np.cos(th), 40 * np.sin(th)),
+        sc(7.5 * np.cos(tc), 7.5 * np.sin(tc)),
+        sc([-30, 30], [-7.5, -7.5]),
+        sc(np.r_[-220, arc_x, 220], np.r_[-47.5, arc_y, -47.5]),
+        sc(60 * np.cos(th), 422.5 - 60 * np.sin(th)),
     ]
 
 
@@ -1177,7 +1147,7 @@ def tab_shots():
     try:
         with st.spinner(f"Descargando tiros de {p['PLAYER_NAME']}..."):
             shots, lg_zones = load_shots(pid, SEASON)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         st.error(f"No se pudo consultar la API de la NBA: {e}")
         return
     if shots.empty:
@@ -1188,7 +1158,6 @@ def tab_shots():
     shots["PTS_VAL"] = np.where(shots["SHOT_TYPE"].astype(str).str.startswith("3"), 3, 2)
     shots["PTS_MADE"] = shots["SHOT_MADE_FLAG"] * shots["PTS_VAL"]
 
-    # ── Filtros ──
     order = shots.drop_duplicates("GAME_ID").sort_values("GAME_DATE")["GAME_ID"].tolist()
     f1, f2, f3, f4 = st.columns([1, 1.3, 1.3, 1.4])
     tipo = f1.selectbox("Tipo de tiro", ["Todos", "2 pts", "3 pts"])
@@ -1205,7 +1174,6 @@ def tab_shots():
         st.info("Ningún tiro cumple los filtros.")
         return
 
-    # ── KPIs ──
     fga, fgm = len(d), int(d["SHOT_MADE_FLAG"].sum())
     fg3m = int(d.loc[d["PTS_VAL"] == 3, "SHOT_MADE_FLAG"].sum())
     efg = (fgm + 0.5 * fg3m) / fga * 100
@@ -1231,7 +1199,6 @@ def tab_shots():
     ])
     st.write("")
 
-    # ── Zonas ──
     z = d.groupby("SHOT_ZONE_BASIC").agg(FGA=("SHOT_ATTEMPTED_FLAG", "sum"), FGM=("SHOT_MADE_FLAG", "sum"),
                                          PTS=("PTS_MADE", "sum"))
     z["FG%"] = z["FGM"] / z["FGA"] * 100
@@ -1245,7 +1212,6 @@ def tab_shots():
     z["ΔPPS"] = z["PPS"] - z["LG_PPS"]
     z = z.sort_values("FGA", ascending=False).reset_index()
 
-    # ── Gráfico principal ──
     cl, cr = st.columns([1.3, 1])
     with cl:
         fig = go.Figure()
